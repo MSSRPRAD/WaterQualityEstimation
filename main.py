@@ -8,13 +8,10 @@ from torch import flatten
 import torch.utils.data as data_utils
 import torch.optim as optim
 import torch.nn.functional as F
-import torcheval
 from torcheval.metrics.functional import r2_score
-import time
-import itertools
-from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
 import sys
+import copy
 
 args = sys.argv
 
@@ -34,12 +31,29 @@ target = args[1]
 season = args[2]
 
 if season == "spring":
-    x = np.load("./WQ_Spring/data_array_olci_new.npy")
-    y = np.load(f"./WQ_Spring/y_{target}.npy")
+    x = np.load("./WQ_Spring-20241222T151544Z-001/WQ_Spring/data_array_olci_new.npy")
+    y = np.load(f"./WQ_Spring-20241222T151544Z-001/WQ_Spring/y_{target}.npy")
 elif season == "fall":
     # print("Fall not supported currently!")
-    x = np.load("./WQ_Project_Fall/Satellite_Data/data_array_olci_new.npy")
-    y = np.load(f"./WQ_Project_Fall/Satellite_Data/y_{target}.npy")
+    x = np.load("./WQ_Project_Fall-20241222T151608Z-001/WQ_Project_Fall/Satellite_Data/data_array_olci_new.npy")
+    y = np.load(f"./WQ_Project_Fall-20241222T151608Z-001/WQ_Project_Fall/Satellite_Data/y_{target}.npy")
+
+
+import random
+import numpy as np
+import torch
+
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+set_seed()
+
+
 
 # Initialize max dictionary
 max_values = {i: -float('inf') for i in range(x.shape[1])}
@@ -177,10 +191,16 @@ import json
 import matplotlib.pyplot as plt
 import pandas as pd
 
+
+def print_model_weights(model):
+    for param_tensor in model.state_dict():
+        print(model.state_dict()[param_tensor].cpu().numpy())
+
 for blocks, channels, dropout, lr in tqdm(param_combinations):
     filename_base = f"{season}_{target}_{blocks}_{channels}_{dropout}_{lr}"
     results_csv_path_train = os.path.join(season, f"train_{filename_base}.csv")
     results_csv_path_test = os.path.join(season, f"test_{filename_base}.csv")
+    model_weights_path = os.path.join(season, f"weights_{filename_base}.pth")
 
     # Check if CSV files already exist
     if os.path.exists(results_csv_path_train) and os.path.exists(results_csv_path_test):
@@ -246,20 +266,40 @@ for blocks, channels, dropout, lr in tqdm(param_combinations):
             train_y_pred.extend(outputs.detach().cpu().numpy())
 
         avg_train_loss = total_train_loss / len(data_loader)
-        train_r2 = r2_score(torch.tensor(train_y_pred), torch.tensor(train_y_true))
+        train_r2 = r2_score(torch.tensor(train_y_pred).squeeze(), torch.tensor(train_y_true).squeeze())
         
+        print("==================")
+        print(f"Train R2 Score: {train_r2}, epoch {epoch}:")
+        print("Predicted:")
+        print(torch.tensor(train_y_pred).squeeze())
+        print("Actual:")
+        print(torch.tensor(train_y_true).squeeze())
+        print("==================")
+
         # Evaluation phase
         model.eval()
         with torch.no_grad():
             test_outputs = model(x_test.to(device))
+            test_outputs_flat = test_outputs.cpu().squeeze()
             test_loss = criterion(test_outputs, y_test.to(device)).item()
-            test_r2 = r2_score(test_outputs.cpu(), y_test)
+            test_r2 = r2_score(test_outputs_flat, y_test.squeeze())
+
+            print("==================")
+            print(f"Test R2 Score {test_r2}, epoch {epoch}:")
+            print("Predicted:")
+            print(test_outputs_flat)
+            print("Actual:")
+            print(y_test.squeeze())
+            print("==================")
             
         # Update best model if test loss improves
         if test_r2 > best_test_r2:
             best_test_r2 = test_r2
+            print("Updating test r2 ...")
+            print(f"Best Test r2 uptill now: {best_test_r2}, Test r2: {test_r2}")
             best_test_loss = test_loss
-            best_model_state = model.state_dict()
+            best_model_state = copy.deepcopy(model.state_dict())
+            torch.save(best_model_state, model_weights_path)
             patience_counter = 0
         else:
             patience_counter += 1
@@ -287,22 +327,29 @@ for blocks, channels, dropout, lr in tqdm(param_combinations):
         })
 
     # Load the best model for final predictions
+    print("=====================")
+    print("Current Model State Dict:")
+    print_model_weights(model)
     model.load_state_dict(best_model_state)
+    print("=====================")
+    print("Model State Dict after updating:")
+    print_model_weights(model)
+    print("=====================")
     model.eval()
     
     # Generate final predictions
     with torch.no_grad():
-        y_pred_train = model(x_train.to(device)).cpu().numpy()
-        y_pred_test = model(x_test.to(device)).cpu().numpy()
+        y_pred_train = model(x_train.to(device).squeeze()).cpu().numpy().squeeze()
+        y_pred_test = model(x_test.to(device).squeeze()).cpu().numpy().squeeze()
 
     # Save predictions and actuals
     results_df_train = pd.DataFrame({
-        'Actual_Train': y_train.numpy().flatten(),
-        'Predicted_Train': y_pred_train.flatten()
+        'Actual_Train': y_train.squeeze().numpy().flatten(),
+        'Predicted_Train': y_pred_train.squeeze().flatten()
     })
     results_df_test = pd.DataFrame({
-        'Actual_Test': y_test.numpy().flatten(),
-        'Predicted_Test': y_pred_test.flatten()
+        'Actual_Test': y_test.squeeze().numpy().flatten(),
+        'Predicted_Test': y_pred_test.squeeze().flatten()
     })
 
     # Save results
