@@ -5,6 +5,7 @@ import pandas as pd
 from tqdm import tqdm
 from torcheval.metrics.functional import r2_score
 import torch
+from torcheval.metrics.functional import mean_squared_error
 
 def plot_actual_vs_predicted(df, filename):
     plt.figure(figsize=(6, 6))
@@ -25,11 +26,15 @@ def plot_actual_vs_predicted(df, filename):
     predicted = torch.tensor(df[f"Predicted_{split}"].values)
     real = torch.tensor(df[f"Actual_{split}"].values)
     r2 = r2_score(predicted, real)
+    mse = mean_squared_error(predicted, real)
 
     # Add R² text in upper left
     plt.text(0.05, 0.95, f"$R^2$ = {r2:.3f}", 
              transform=plt.gca().transAxes,
              fontsize=10)
+    plt.text(0.05, 0.90, f"$MSE$ = {mse:.3f}",
+    	     transform=plt.gca().transAxes,
+    	     fontsize=10)
 
     # Labels and Title
     plt.xlabel(f"Measured {split} {feature} in {season}", fontsize=12, fontweight="bold")
